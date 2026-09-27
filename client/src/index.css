@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Flowbase light theme — warm off-white + deep teal primary + amber accent */
+    --background: 40 25% 98%;
+    --foreground: 200 20% 12%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 200 20% 12%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 200 20% 12%;
+
+    --primary: 173 80% 27%;
+    --primary-foreground: 40 25% 98%;
+
+    --secondary: 40 20% 94%;
+    --secondary-foreground: 200 20% 15%;
+
+    --muted: 40 18% 94%;
+    --muted-foreground: 200 10% 42%;
+
+    --accent: 38 92% 50%;
+    --accent-foreground: 24 40% 15%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+
+    --success: 152 60% 36%;
+    --warning: 38 92% 50%;
+
+    --border: 30 18% 88%;
+    --input: 30 18% 88%;
+    --ring: 173 80% 27%;
+
+    --sidebar: 200 22% 10%;
+    --sidebar-foreground: 40 15% 90%;
+    --sidebar-border: 200 20% 18%;
+    --sidebar-accent: 200 22% 16%;
+
+    --radius: 0.65rem;
+  }
+
+  .dark {
+    --background: 200 22% 7%;
+    --foreground: 40 12% 92%;
+
+    --card: 200 20% 9%;
+    --card-foreground: 40 12% 92%;
+
+    --popover: 200 20% 9%;
+    --popover-foreground: 40 12% 92%;
+
+    --primary: 173 65% 45%;
+    --primary-foreground: 200 25% 8%;
+
+    --secondary: 200 16% 15%;
+    --secondary-foreground: 40 12% 92%;
+
+    --muted: 200 16% 15%;
+    --muted-foreground: 40 8% 62%;
+
+    --accent: 38 88% 55%;
+    --accent-foreground: 24 40% 12%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 98%;
+
+    --success: 152 50% 45%;
+    --warning: 38 88% 55%;
+
+    --border: 200 16% 18%;
+    --input: 200 16% 18%;
+    --ring: 173 65% 45%;
+
+    --sidebar: 200 26% 5%;
+    --sidebar-foreground: 40 12% 88%;
+    --sidebar-border: 200 20% 14%;
+    --sidebar-accent: 200 20% 12%;
+  }
+
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { @apply bg-border rounded-full; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+}
