@@ -77,7 +77,7 @@ export const projectHealth = catchAsync(async (req: Request, res: Response) => {
     Task.countDocuments({ projectId: pid, dueDate: { $lt: new Date() }, status: { $ne: "Done" } }),
     Task.countDocuments({ projectId: pid, dueDate: { $gte: new Date(), $lte: in24h }, status: { $ne: "Done" } }),
     Task.countDocuments({ projectId: pid, status: "In Review", dependencies: { $exists: true, $not: { $size: 0 } } }),
-    Task.countDocuments({ projectId: pid, assigneeId: { $exists: false }, status: { $ne: "Done" } }),
+    Task.countDocuments({ projectId: pid, assigneeIds: { $size: 0 }, status: { $ne: "Done" } }),
   ]);
 
   const reasons: string[] = [];
@@ -137,10 +137,11 @@ export const teamWorkload = catchAsync(async (req: Request, res: Response) => {
   const wid = new Types.ObjectId(workspaceId);
 
   const workload = await Task.aggregate([
-    { $match: { workspaceId: wid, status: { $ne: "Done" }, assigneeId: { $exists: true } } },
+    { $match: { workspaceId: wid, status: { $ne: "Done" }, assigneeIds: { $exists: true, $not: { $size: 0 } } } },
+    { $unwind: "$assigneeIds" },
     {
       $group: {
-        _id: "$assigneeId",
+        _id: "$assigneeIds",
         assignedTasks: { $sum: 1 },
         estimatedMinutes: { $sum: { $ifNull: ["$estimatedMinutes", 0] } },
       },

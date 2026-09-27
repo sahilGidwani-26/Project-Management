@@ -52,10 +52,12 @@ export interface Task {
   _id: string;
   workspaceId: string;
   projectId: string;
+  parentTaskId?: string;
   title: string;
   description?: string;
-  assigneeId?: User;
+  assigneeIds: User[];
   reporterId?: User;
+  createdBy?: User;
   status: TaskStatus;
   priority: Priority;
   startDate?: string;
@@ -72,6 +74,19 @@ export interface Comment {
   taskId: string;
   userId: User;
   content: string;
+  mentions?: User[];
+  createdAt: string;
+}
+
+export interface Attachment {
+  _id: string;
+  taskId?: string;
+  projectId?: string;
+  uploadedBy: User;
+  fileName: string;
+  fileUrl: string;
+  fileType: string;
+  fileSize: number;
   createdAt: string;
 }
 

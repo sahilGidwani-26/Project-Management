@@ -5,14 +5,86 @@ import { sendSuccess, sendPaginated } from "../utils/ApiResponse";
 import { Task } from "../models/Task";
 import { Notification } from "../models/Notification";
 import { ActivityLog } from "../models/ActivityLog";
+import { User } from "../models/User";
+import { sendMail } from "../utils/mailer";
+import { taskAssignedEmail, buildTaskUrl } from "../utils/emailTemplates";
 import { Server as SocketIOServer } from "socket.io";
 
 function getIO(req: Request): SocketIOServer {
   return req.app.get("io");
 }
 
+async function notifyAssignees(params: {
+  req: Request;
+  assigneeIds: string[];
+  taskId: string;
+  taskTitle: string;
+  workspaceId: string;
+  projectId: string;
+  projectName: string;
+  assignedByName: string;
+  dueDate?: Date;
+  excludeUserId?: string;
+}) {
+  const targets = params.assigneeIds.filter((id) => id !== params.excludeUserId);
+  if (!targets.length) return;
+
+  const users = await User.find({ _id: { $in: targets } }).select("email name notificationPreferences");
+  const taskUrl = buildTaskUrl(params.workspaceId, params.projectId, params.taskId);
+
+  await Promise.all(
+    users.map(async (u) => {
+      await Notification.create({
+        userId: u._id,
+        type: "task_assigned",
+        title: "New task assigned",
+        message: `You were assigned to "${params.taskTitle}"`,
+        relatedWorkspaceId: params.workspaceId,
+        relatedProjectId: params.projectId,
+        relatedTaskId: params.taskId,
+      });
+      params.req.app.get("io").to(`user:${u._id}`).emit("notification:new", { title: "New task assigned" });
+
+      if (u.notificationPreferences?.taskAssigned !== false) {
+        const { subject, html } = taskAssignedEmail({
+          taskTitle: params.taskTitle,
+          projectName: params.projectName,
+          assignedByName: params.assignedByName,
+          dueDate: params.dueDate,
+          taskUrl,
+        });
+        sendMail(u.email, subject, html).catch(() => {});
+      }
+    })
+  );
+}
+
 export const createTask = catchAsync(async (req: Request, res: Response) => {
-  const { workspaceId, projectId, title, description, assigneeId, status, priority, dueDate, labels } = req.body;
+  const {
+    workspaceId,
+    projectId,
+    title,
+    description,
+    assigneeIds,
+    status,
+    priority,
+    startDate,
+    dueDate,
+    labels,
+    subtasks,
+  } = req.body as {
+    workspaceId: string;
+    projectId: string;
+    title: string;
+    description?: string;
+    assigneeIds?: string[];
+    status: string;
+    priority: string;
+    startDate?: string;
+    dueDate?: string;
+    labels?: string[];
+    subtasks?: string[];
+  };
 
   const lastTask = await Task.findOne({ projectId, status }).sort({ order: -1 });
   const order = (lastTask?.order ?? 0) + 1;
@@ -22,9 +94,10 @@ export const createTask = catchAsync(async (req: Request, res: Response) => {
     projectId,
     title,
     description,
-    assigneeId,
+    assigneeIds: assigneeIds || [],
     status,
     priority,
+    startDate,
     dueDate,
     labels,
     order,
@@ -32,17 +105,35 @@ export const createTask = catchAsync(async (req: Request, res: Response) => {
     createdBy: req.user!.id,
   });
 
-  if (assigneeId) {
-    await Notification.create({
-      userId: assigneeId,
-      type: "task_assigned",
-      title: "New task assigned",
-      message: `You were assigned to "${title}"`,
-      relatedWorkspaceId: workspaceId,
-      relatedProjectId: projectId,
-      relatedTaskId: task._id,
-    });
+  if (subtasks?.length) {
+    await Task.insertMany(
+      subtasks.filter(Boolean).map((subtaskTitle) => ({
+        workspaceId,
+        projectId,
+        parentTaskId: task._id,
+        title: subtaskTitle,
+        reporterId: req.user!.id,
+        createdBy: req.user!.id,
+        status: "Todo",
+      }))
+    );
   }
+
+  const project = await task.populate<{ projectId: { name: string } }>("projectId", "name");
+  const reporter = await User.findById(req.user!.id).select("name");
+
+  await notifyAssignees({
+    req,
+    assigneeIds: (assigneeIds || []).map(String),
+    taskId: task._id.toString(),
+    taskTitle: title,
+    workspaceId,
+    projectId,
+    projectName: (project.projectId as unknown as { name: string })?.name || "your project",
+    assignedByName: reporter?.name || "Someone",
+    dueDate: dueDate ? new Date(dueDate) : undefined,
+    excludeUserId: req.user!.id,
+  });
 
   await ActivityLog.create({
     workspaceId,
@@ -53,20 +144,33 @@ export const createTask = catchAsync(async (req: Request, res: Response) => {
     metadata: { title },
   });
 
-  getIO(req).to(`project:${projectId}`).emit("task:created", task);
-  if (assigneeId) getIO(req).to(`user:${assigneeId}`).emit("notification:new", { title, type: "task_assigned" });
+  const populated = await Task.findById(task._id).populate("assigneeIds", "name profileImage").populate("reporterId", "name profileImage");
 
-  return sendSuccess(res, 201, task, "Task created");
+  getIO(req).to(`project:${projectId}`).emit("task:created", populated);
+
+  return sendSuccess(res, 201, populated, "Task created");
 });
 
 export const listTasks = catchAsync(async (req: Request, res: Response) => {
   const page = Number(req.query.page) || 1;
   const limit = Number(req.query.limit) || 50;
-  const { projectId, assigneeId, status, priority, label, search, sort } = req.query as Record<string, string>;
+  const {
+    projectId,
+    assigneeId,
+    createdBy,
+    status,
+    priority,
+    label,
+    search,
+    sort,
+  } = req.query as Record<string, string>;
+
+  const isValidObjectId = (v?: string) => !!v && /^[0-9a-fA-F]{24}$/.test(v);
 
   const filter: Record<string, unknown> = {};
-  if (projectId) filter.projectId = projectId;
-  if (assigneeId) filter.assigneeId = assigneeId;
+  if (isValidObjectId(projectId)) filter.projectId = projectId;
+  if (isValidObjectId(assigneeId)) filter.assigneeIds = assigneeId;
+  if (isValidObjectId(createdBy)) filter.createdBy = createdBy;
   if (status) filter.status = status;
   if (priority) filter.priority = priority;
   if (label) filter.labels = label;
@@ -83,8 +187,9 @@ export const listTasks = catchAsync(async (req: Request, res: Response) => {
       .sort(sortMap[sort] || { order: 1 })
       .skip((page - 1) * limit)
       .limit(limit)
-      .populate("assigneeId", "name profileImage")
-      .populate("reporterId", "name profileImage"),
+      .populate("assigneeIds", "name profileImage")
+      .populate("reporterId", "name profileImage")
+      .populate("createdBy", "name profileImage"),
     Task.countDocuments(filter),
   ]);
 
@@ -93,16 +198,43 @@ export const listTasks = catchAsync(async (req: Request, res: Response) => {
 
 export const getTask = catchAsync(async (req: Request, res: Response) => {
   const task = await Task.findById(req.params.taskId)
-    .populate("assigneeId", "name profileImage email")
+    .populate("assigneeIds", "name profileImage email")
     .populate("reporterId", "name profileImage email")
+    .populate("createdBy", "name profileImage email")
     .populate("dependencies", "title status");
   if (!task) throw ApiError.notFound("Task not found");
   return sendSuccess(res, 200, task, "Task");
 });
 
 export const updateTask = catchAsync(async (req: Request, res: Response) => {
-  const task = await Task.findByIdAndUpdate(req.params.taskId, req.body, { new: true });
+  const previous = await Task.findById(req.params.taskId);
+  if (!previous) throw ApiError.notFound("Task not found");
+
+  const task = await Task.findByIdAndUpdate(req.params.taskId, req.body, { new: true })
+    .populate("assigneeIds", "name profileImage")
+    .populate("reporterId", "name profileImage");
   if (!task) throw ApiError.notFound("Task not found");
+
+  if (req.body.assigneeIds) {
+    const before = new Set(previous.assigneeIds.map(String));
+    const newlyAdded = (req.body.assigneeIds as string[]).filter((id) => !before.has(id));
+    if (newlyAdded.length) {
+      const project = await task.populate<{ projectId: { name: string } }>("projectId", "name");
+      const actor = await User.findById(req.user!.id).select("name");
+      await notifyAssignees({
+        req,
+        assigneeIds: newlyAdded,
+        taskId: task._id.toString(),
+        taskTitle: task.title,
+        workspaceId: task.workspaceId.toString(),
+        projectId: task.projectId.toString(),
+        projectName: (project.projectId as unknown as { name: string })?.name || "your project",
+        assignedByName: actor?.name || "Someone",
+        dueDate: task.dueDate,
+        excludeUserId: req.user!.id,
+      });
+    }
+  }
 
   getIO(req).to(`project:${task.projectId}`).emit("task:updated", task);
   return sendSuccess(res, 200, task, "Task updated");
@@ -117,10 +249,9 @@ export const updateTaskStatus = catchAsync(async (req: Request, res: Response) =
   );
   if (!task) throw ApiError.notFound("Task not found");
 
-  // Real-time: broadcast the Kanban move to everyone viewing this project.
   getIO(req).to(`project:${task.projectId}`).emit("task:moved", { taskId: task._id, status: task.status, order: task.order });
 
-  if (status === "Done" && task.assigneeId) {
+  if (status === "Done" && task.assigneeIds.length) {
     await Notification.create({
       userId: task.reporterId,
       type: "task_completed",
@@ -131,7 +262,6 @@ export const updateTaskStatus = catchAsync(async (req: Request, res: Response) =
     });
   }
 
-  // Recurring task: generate the next occurrence once this one is Done.
   if (status === "Done" && task.recurrence?.active) {
     const nextDue = computeNextDueDate(task.dueDate || new Date(), task.recurrence);
     const nextTask = await Task.create({
@@ -139,7 +269,7 @@ export const updateTaskStatus = catchAsync(async (req: Request, res: Response) =
       projectId: task.projectId,
       title: task.title,
       description: task.description,
-      assigneeId: task.assigneeId,
+      assigneeIds: task.assigneeIds,
       reporterId: task.reporterId,
       priority: task.priority,
       status: "Todo",
@@ -179,15 +309,10 @@ export const addSubtask = catchAsync(async (req: Request, res: Response) => {
 });
 
 export const listSubtasks = catchAsync(async (req: Request, res: Response) => {
-  const subtasks = await Task.find({ parentTaskId: req.params.taskId });
+  const subtasks = await Task.find({ parentTaskId: req.params.taskId }).populate("assigneeIds", "name profileImage");
   return sendSuccess(res, 200, subtasks, "Subtasks");
 });
 
-/**
- * Adds a dependency (`dependsOnTaskId` must finish before `taskId` can start).
- * Prevents direct and transitive cycles by walking the dependency graph
- * before saving.
- */
 export const addDependency = catchAsync(async (req: Request, res: Response) => {
   const { taskId } = req.params;
   const { dependsOnTaskId } = req.body;
@@ -214,7 +339,6 @@ export const removeDependency = catchAsync(async (req: Request, res: Response) =
   return sendSuccess(res, 200, task, "Dependency removed");
 });
 
-/** Walks forward from `dependsOnTaskId` to see if it (eventually) depends on `taskId`. */
 async function createsCycle(taskId: string, dependsOnTaskId: string): Promise<boolean> {
   const visited = new Set<string>();
   const queue: string[] = [dependsOnTaskId];
@@ -233,11 +357,6 @@ async function createsCycle(taskId: string, dependsOnTaskId: string): Promise<bo
   return false;
 }
 
-/**
- * Set/clear recurrence on a task (e.g. "Weekly Team Meeting").
- * Actual next-occurrence generation happens in updateTaskStatus below,
- * when a recurring task is marked Done.
- */
 export const setRecurrence = catchAsync(async (req: Request, res: Response) => {
   const { frequency, intervalDays, active } = req.body;
   const task = await Task.findByIdAndUpdate(

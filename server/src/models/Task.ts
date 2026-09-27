@@ -9,7 +9,7 @@ export interface ITask extends Document {
   projectId: Types.ObjectId;
   title: string;
   description?: string;
-  assigneeId?: Types.ObjectId;
+  assigneeIds: Types.ObjectId[];
   reporterId: Types.ObjectId;
   status: TaskStatus;
   priority: Priority;
@@ -28,6 +28,7 @@ export interface ITask extends Document {
     active: boolean;
   };
   recurrenceSourceId?: Types.ObjectId; // set on generated occurrences, points to the original recurring task
+  dueReminderSentAt?: Date; // prevents sending the "due soon" email more than once
   createdBy: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
@@ -39,7 +40,7 @@ const taskSchema = new Schema<ITask>(
     projectId: { type: Schema.Types.ObjectId, ref: "Project", required: true, index: true },
     title: { type: String, required: true, trim: true },
     description: String,
-    assigneeId: { type: Schema.Types.ObjectId, ref: "User", index: true },
+    assigneeIds: [{ type: Schema.Types.ObjectId, ref: "User", index: true }],
     reporterId: { type: Schema.Types.ObjectId, ref: "User", required: true },
     status: { type: String, enum: ["Backlog", "Todo", "In Progress", "In Review", "Done"], default: "Todo", index: true },
     priority: { type: String, enum: ["Low", "Medium", "High", "Urgent"], default: "Medium" },
@@ -58,6 +59,7 @@ const taskSchema = new Schema<ITask>(
       active: { type: Boolean, default: false },
     },
     recurrenceSourceId: { type: Schema.Types.ObjectId, ref: "Task" },
+    dueReminderSentAt: Date,
     createdBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
   },
   { timestamps: true }
